@@ -76,6 +76,11 @@ options:
     required: false
     default: null
     aliases: []
+  dhcp_options:
+    description:
+     - 'A dictionary of dhcp_options for the vpc - either id (to associate existing dhcp_options) or dns_servers list (to create a new set of dhcp_options and associate with the vpc)'
+     required: false
+     version_added: "1.9"
   wait:
     description:
       - wait for the VPC to be in state 'available' before returning
@@ -166,6 +171,16 @@ EXAMPLES = '''
                 gw: igw
         region: us-west-2
       register: vpc
+
+# Associating and/or creating dhcp_options
+    ec2_vpc:
+      state=present
+      cidr_block: 172.23.0.0/16
+      dhcp_options:
+        id: dopt-666
+        dns_servers:
+          - 8.8.8.8
+          - 8.8.4.4
 
 # Removal of a VPC by id
       ec2_vpc:
@@ -268,6 +283,7 @@ def create_vpc(module, vpc_conn):
     internet_gateway = module.params.get('internet_gateway')
     route_tables = module.params.get('route_tables')
     vpc_spec_tags = module.params.get('resource_tags')
+    dhcp_options = module.params.get('dhcp_options')
     wait = module.params.get('wait')
     wait_timeout = int(module.params.get('wait_timeout'))
     changed = False
@@ -493,6 +509,23 @@ def create_vpc(module, vpc_conn):
                 except EC2ResponseError, e:
                     module.fail_json(msg='Unable to delete old route table {0}, error: {1}'.format(rt.id, e))
 
+    # Handle dhcp_options - associate existing or create and associate
+    if dhcp_options is not None:
+        dhcp_opts_id = None
+        try:
+            if 'id' in dhcp_options.keys() and dhcp_options['id'] is not None and dhcp_options['id'] != '':
+                dhcp_opts_id = dhcp_options['id']
+            elif 'dns_servers' in dhcp_options.keys() and dhcp_options['dns_servers'] is not None:
+                dhcp_opts = vpc_conn.create_dhcp_options(domain_name_servers=dhcp_options['dns_servers'])
+                dhcp_opts_id = dhcp_opts.id
+                changed = True
+            if dhcp_opts_id is not None:
+                vpc_conn.associate_dhcp_options(dhcp_opts_id, vpc.id)
+                vpc.dhcp_options_id = dhcp_opts_id
+                changed = True
+        except boto.exception.BotoServerError, e:
+            module.fail_json(msg = "%s: %s" % (e.error_code, e.error_message))
+
     vpc_dict = get_vpc_info(vpc)
     created_vpc_id = vpc.id
     returned_subnets = []
@@ -566,6 +599,13 @@ def terminate_vpc(module, vpc_conn, vpc_id=None, cidr=None):
                         vpc_conn.delete_route_table(rt.id)
 
                 vpc_conn.delete_vpc(vpc.id)
+
+                dhcp_options = module.params.get('dhcp_options')
+                if dhcp_options is not None:
+                    if 'id' in dhcp_options.keys() and dhcp_options['id'] is not None and dhcp_options['id'] != '':
+                        vpc_conn.delete_dhcp_options(dhcp_options['id'])
+                        changed = True
+
             except EC2ResponseError, e:
                 module.fail_json(
                     msg='Unable to delete VPC {0}, error: {1}'.format(vpc.id, e)
@@ -589,6 +629,7 @@ def main():
             internet_gateway = dict(type='bool', default=False),
             resource_tags = dict(type='dict', required=True),
             route_tables = dict(type='list'),
+            dhcp_options = dict(type='dict'),
             state = dict(choices=['present', 'absent'], default='present'),
         )
     )
