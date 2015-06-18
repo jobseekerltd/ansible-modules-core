@@ -80,7 +80,7 @@ options:
     description:
      - 'A dictionary of dhcp_options for the vpc - either id (to associate existing dhcp_options) or dns_servers list (to create a new set of dhcp_options and associate with the vpc)'
      required: false
-     version_added: "1.9"
+     version_added: "2.0"
   wait:
     description:
       - wait for the VPC to be in state 'available' before returning
